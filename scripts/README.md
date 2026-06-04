@@ -1,6 +1,7 @@
 # xctl-publication — XCTL 安装脚本发布仓
 
-> 由 xuictl 源码 `./scripts/publish-github.sh scripts` 同步，请勿手改 `scripts/`。
+> 由 xuictl 源码 `./scripts/publish-github.sh scripts` 同步（Gitea git 优先），请勿手改 `scripts/`。  
+> 发版说明：[docs/how-to/xctl-publication-publish.md](../../docs/how-to/xctl-publication-publish.md)
 
 ## 仓库
 
@@ -9,7 +10,7 @@
 | **Gitea（脚本 push 优先）** | `http://10.0.1.10:8418/gitea-catxtom-overbook/xctl-publication` |
 | **GitHub（Release + Mirror 备份）** | `https://github.com/catxtom/xctl-publication` |
 
-二进制 Release（`master-latest` / `client-latest`）仍在 **GitHub Releases**；安装 **shell** 优先从可达的 Gitea raw 拉取，否则回退 GitHub raw。
+二进制 Release（`master-latest` / `client-latest`）：发版时 **先 Gitea Releases，再 GitHub**；装机时 URL **自动探测 Gitea**，否则 GitHub。
 
 ---
 
