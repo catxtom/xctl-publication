@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+# xctl — XCTL Master 运维入口（安装脚本复制到 /usr/local/bin/xctl）
+
+set -euo pipefail
+
+INSTALL_DIR="/etc/xctl"
+export XCTL_LANG_FILE="${INSTALL_DIR}/xctl.lang"
+MASTER_DIR="${INSTALL_DIR}/master"
+ENV_FILE="${INSTALL_DIR}/master.env"
+ADMIN_CREDS_FILE="${INSTALL_DIR}/admin.credentials"
+SYSTEMD_UNIT="xctl-master.service"
+: "${XCTL_PUBLICATION_REPO:=catxtom/xctl-publication}"
+
+if [[ -f "${INSTALL_DIR}/xctl-publication.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "${INSTALL_DIR}/xctl-publication.sh"
+  sync_xctl_ui_scripts "${INSTALL_DIR}" "${INSTALL_DIR}" || true
+elif [[ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/xctl-publication.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/xctl-publication.sh"
+fi
+
+INSTALL_SCRIPT_URL="${XUICTL_INSTALL_SCRIPT_URL:-${XCTL_INSTALL_SCRIPT_URL:-$(
+  if declare -F master_install_script_url >/dev/null 2>&1; then
+    master_install_script_url
+  else
+    echo "https://raw.githubusercontent.com/${XCTL_PUBLICATION_REPO}/main/scripts/install.sh"
+  fi
+)}}"
+
+_xctl_load_banner() {
+  if [[ -f "${INSTALL_DIR}/xctl-banner.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "${INSTALL_DIR}/xctl-banner.sh"
+  elif [[ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/xctl-banner.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/xctl-banner.sh"
+  else
+    print_xctl_banner() { :; }
+    print_info() { echo "🅸 $*"; }
+    print_warn() { echo "🆆 $*"; }
+    print_success() { echo "🆂 $*"; }
+    print_error() { echo "🅴 $*" >&2; }
+    print_section_header() { echo; echo "  $1"; echo; }
+    _xctl_msg() { printf '%s' "$1"; }
+  fi
+}
+_xctl_load_banner
+
+usage() {
+  print_xctl_banner
+  echo "$(_xctl_msg u_title):"
+  echo "  $(_xctl_msg u_master)"
+  echo
+  echo "$(_xctl_msg u_sub):"
+  echo "  $(_xctl_msg u_install)"
+  echo "  $(_xctl_msg u_upgrade)"
+  echo "  $(_xctl_msg u_menu)"
+  echo "  $(_xctl_msg u_restart)"
+  echo "  $(_xctl_msg u_stop)"
+  echo "  $(_xctl_msg u_status)"
+  echo "  $(_xctl_msg u_logs)"
+  echo "  $(_xctl_msg u_creds)"
+  echo "  $(_xctl_msg u_passwd)"
+  echo "  $(_xctl_msg u_help)"
+  echo
+  echo "$(_xctl_msg u_ex):"
+  echo "  $(_xctl_msg u_ex1)"
+  echo "  $(_xctl_msg u_ex2)"
+  if declare -F print_master_install_hints >/dev/null 2>&1; then
+    print_master_install_hints
+  fi
+}
+
+master_menu() {
+  local script="${INSTALL_DIR}/xctl-master-install.sh"
+  if [[ -f "$script" ]]; then
+    exec bash "$script"
+  fi
+  local repo_script
+  repo_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/xctl-master-install.sh"
+  if [[ -f "$repo_script" ]]; then
+    exec bash "$repo_script"
+  fi
+  print_error "$(_xctl_msg err_script_missing)"
+  exit 1
+}
+
+master_install() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    print_error "$(_xctl_msg err_install_root)"
+    exit 1
+  fi
+  if [[ -n "$INSTALL_SCRIPT_URL" ]]; then
+    curl -fsSL "$INSTALL_SCRIPT_URL" | bash -s -- -install
+    return
+  fi
+  local script="${INSTALL_DIR}/xctl-master-install.sh"
+  if [[ ! -f "$script" ]]; then
+    script="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/xctl-master-install.sh"
+  fi
+  [[ -f "$script" ]] || {
+    print_error "$(_xctl_msg err_script_path "$script")"
+    exit 1
+  }
+  exec bash "$script" -install
+}
+
+master_upgrade() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    print_error "$(_xctl_msg err_upgrade_root)"
+    exit 1
+  fi
+  local script="${INSTALL_DIR}/xctl-master-install.sh"
+  if [[ ! -f "$script" ]]; then
+    script="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/xctl-master-install.sh"
+  fi
+  [[ -f "$script" ]] || {
+    print_error "$(_xctl_msg err_script_path "$script")"
+    exit 1
+  }
+  exec bash "$script" -upgrade
+}
+
+master_passwd() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    print_error "$(_xctl_msg err_passwd_root)"
+    exit 1
+  fi
+  local user="${1:-}" pass line
+  if [[ -z "$user" && -f "$ADMIN_CREDS_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$ADMIN_CREDS_FILE"
+    user="${username:-}"
+  fi
+  user="$(echo "${user:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  if [[ -z "$user" ]]; then
+    print_error "$(_xctl_msg err_passwd_user)"
+    exit 1
+  fi
+  [[ -f "${MASTER_DIR}/xctl-master" ]] || {
+    print_error "$(_xctl_msg err_not_installed "$MASTER_DIR")"
+    exit 1
+  }
+  local out
+  out="$(
+    cd "$MASTER_DIR"
+    set -a
+    # shellcheck disable=SC1090
+    [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
+    set +a
+    ./xctl-master --config configs/master.yaml -reset-admin-password -u "$user"
+  )"
+  pass="$(echo "$out" | sed -n 's/^admin_password_reset username=.* password=//p')"
+  if [[ -z "$pass" ]]; then
+    echo "$out" >&2
+    exit 1
+  fi
+  print_success "$(_xctl_msg ok_passwd "$user")"
+  echo "  $(_xctl_msg lbl_user): ${user}"
+  echo "  $(_xctl_msg lbl_pass): ${pass}"
+  if [[ -f "$ADMIN_CREDS_FILE" ]]; then
+    umask 077
+    {
+      echo "username=${user}"
+      echo "password=${pass}"
+      echo "reset_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } >"$ADMIN_CREDS_FILE"
+    chmod 600 "$ADMIN_CREDS_FILE"
+    print_info "$(_xctl_msg info_passwd_saved "$ADMIN_CREDS_FILE")"
+  fi
+}
+
+master_creds() {
+  local port=80 ip
+  print_section_header "$(_xctl_msg info_portal)"
+  if [[ -f "${MASTER_DIR}/configs/master.yaml" ]]; then
+    port="$(grep -E '^\s*port:' "${MASTER_DIR}/configs/master.yaml" | head -1 | awk '{print $2}')"
+  fi
+  print_info "$(_xctl_msg info_urls)"
+  echo "———————————————————————————————————"
+  if command -v ip >/dev/null; then
+    while IFS= read -r ip; do
+      [[ "$ip" =~ ^127\. ]] && continue
+      echo "  http://${ip}:${port}/"
+    done < <(ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | sort -u)
+  else
+    echo "  http://127.0.0.1:${port}/"
+  fi
+  echo "———————————————————————————————————"
+  if [[ -f "$ADMIN_CREDS_FILE" ]]; then
+    echo
+    print_info "$(_xctl_msg info_creds_file "$ADMIN_CREDS_FILE")"
+    echo "———————————————————————————————————"
+    sed 's/^/  /' "$ADMIN_CREDS_FILE"
+    echo "———————————————————————————————————"
+  else
+    echo
+    print_warn "$(_xctl_msg warn_no_creds_dev "$ADMIN_CREDS_FILE")"
+  fi
+}
+
+cmd="${1:-}"
+sub="${2:-menu}"
+
+case "$cmd" in
+  master|"")
+    case "$sub" in
+      install) master_install ;;
+      upgrade) master_upgrade ;;
+      menu|"") master_menu ;;
+      restart)
+        systemctl restart "${SYSTEMD_UNIT}"
+        print_success "$(_xctl_msg ok_unit_restarted "$SYSTEMD_UNIT")"
+        ;;
+      stop)
+        systemctl stop "${SYSTEMD_UNIT}"
+        print_success "$(_xctl_msg ok_unit_stopped "$SYSTEMD_UNIT")"
+        ;;
+      status)
+        systemctl status "${SYSTEMD_UNIT}" --no-pager
+        ;;
+      logs)
+        journalctl -u "${SYSTEMD_UNIT}" -f
+        ;;
+      creds) master_creds ;;
+      passwd) master_passwd "${3:-}" ;;
+      help|-h|--help) usage ;;
+      *)
+        print_error "$(_xctl_msg err_unknown_sub "$sub")"
+        usage
+        exit 1
+        ;;
+    esac
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    print_error "$(_xctl_msg err_unknown_cmd "$cmd")"
+    usage
+    exit 1
+    ;;
+esac
