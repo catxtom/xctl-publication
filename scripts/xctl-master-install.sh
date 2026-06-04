@@ -370,7 +370,7 @@ panel:
   enabled: true
 
 logging:
-  level: "info"
+  level: "none"
   http_style: "structured"
   format: "json"
   file: ""
@@ -381,7 +381,7 @@ observability:
 security:
   cors:
     enabled: true
-    allow_all: false
+    allow_all: true
     allowed_origins: []
 EOF
   chmod 600 "${MASTER_DIR}/configs/master.yaml"
